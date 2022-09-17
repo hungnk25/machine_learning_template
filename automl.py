@@ -13,6 +13,8 @@ from hyperopt.pyll import scope
 from sklearn.model_selection import StratifiedKFold, cross_val_score, GridSearchCV, RandomizedSearchCV
 from lightgbm import LGBMClassifier
 from xgboost import XGBClassifier
+from catboost import CatBoostClassifier, CatBoostRegressor
+
 import time as tm
 
 import logging
@@ -169,6 +171,84 @@ class AutoXGB():
             self.tune(X, y)
         logger.info(f"Fitting model with input data")
         model = XGBClassifier(**self.best_params)
+        model.fit(X, y)
+        acc = accuracy_score(y, model.predict(X))
+        logger.info(f"Model training accuracy: {acc}")
+        self.model = model
+
+
+    def predict(self, X):
+        if not self.model:
+            logger.info("There is no model. Tune and train your model first")
+            return []
+        y_pred = self.model.predict(X)
+        return y_pred
+
+
+#CATBOOST PARAMETERS
+CB_MAX_DEPTH = 8 #maximum tree depth in CatBoost
+OBJECTIVE_CB_REG = 'MAE' #CatBoost regression metric
+OBJECTIVE_CB_CLASS = 'Logloss' #CatBoost classification metric
+
+
+class AutoCatboost():
+    
+    default_catboost_space = {
+
+        "n_estimators": hp.quniform("n_estimators", 100, 1000, 10),
+        'depth': hp.quniform('depth', 2, CB_MAX_DEPTH, 1),
+        'max_bin' : scope.int(hp.quniform('max_bin', 1, 254, 1)), #if using CPU just set this to 254
+        'l2_leaf_reg' : hp.uniform('l2_leaf_reg', 0, 5),
+        'min_data_in_leaf' : hp.quniform('min_data_in_leaf', 1, 50, 1),
+        'random_strength' : hp.loguniform('random_strength', np.log(0.005), np.log(5)),
+        'bootstrap_type' : hp.choice('bootstrap_type', ['Bayesian', 'Bernoulli', 'No']),
+        'learning_rate' : hp.loguniform('learning_rate', np.log(0.01), np.log(0.25)),
+        'eval_metric' : "Accuracy",
+        'fold_len_multiplier' : hp.loguniform('fold_len_multiplier', np.log(1.01), np.log(2.5)),
+        'od_type' : 'Iter',
+        'od_wait' : 25,
+        #'task_type' : 'GPU',
+        'verbose' : False          
+    }
+
+    def __init__(self, space=default_catboost_space, n_eval=10):
+        self.n_eval = n_eval
+        self.space = space
+        self.model = None
+        self.best_params = None
+
+    def tune(self, X, y):
+
+        def objective(params):
+            kfold = StratifiedKFold(n_splits=5, shuffle=True, random_state=0)
+            model = CatBoostClassifier(**params)
+            scores = cross_val_score(model, X, y, cv=kfold, scoring="accuracy", n_jobs=-1)
+            #y_pred = model.predict(x_val)
+            score = scores.mean()
+            # TODO: Add the importance for the selected features
+            #print("\tScore {0}".format(score))
+            # The score function should return the loss (1-score)
+            # since the optimize function looks for the minimum
+            loss = 1 - score
+            return {'loss': loss, 'status': STATUS_OK}
+    
+        logger.info(f"Starting optimization process for model Catboost Classifier")
+        st = tm.time()
+        
+        trials = Trials() 
+        best = fmin(objective, self.space, algo=tpe.suggest, max_evals=self.n_eval, trials=trials)
+        self.best_params = space_eval(self.space, best)
+        logger.info(f"Best params for model: {self.best_params}")
+        logger.info(f"Time taken to run for: {(tm.time() - st)/60:.1f}(mins)")
+
+        #return self.best_params
+
+    def fit(self, X, y):
+        if not self.best_params:
+            logger.info(f"Haven't run model tuning yet. Starting tuning to find best params")
+            self.tune(X, y)
+        logger.info(f"Fitting model with input data")
+        model = CatBoostClassifier(**self.best_params)
         model.fit(X, y)
         acc = accuracy_score(y, model.predict(X))
         logger.info(f"Model training accuracy: {acc}")
