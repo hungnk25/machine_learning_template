@@ -67,11 +67,12 @@ class AutoLGB():
     def tune(self, X, y):
 
         def objective(params):
-            kfold = StratifiedKFold(n_splits=5, shuffle=True, random_state=0)
+            X_trn, X_val, y_trn, y_val = train_test_split(X, y, test_size=0.2)
+            eval_set = [(X_val, y_val)]
             model = LGBMClassifier(**params)
-            scores = cross_val_score(model, X, y, cv=kfold, scoring="accuracy", n_jobs=-1)
-            #y_pred = model.predict(x_val)
-            score = scores.mean()
+            model.fit(X_trn, y_trn, eval_set=eval_set, verbose=False)
+            y_pred = model.predict(X_val)
+            score = accuracy_score(y_val, y_pred)
             # TODO: Add the importance for the selected features
             #print("\tScore {0}".format(score))
             # The score function should return the loss (1-score)
